@@ -1,23 +1,35 @@
 package org.kyj.fx.wbs.dashboard;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+
+import javax.imageio.ImageIO;
 
 import javafx.application.Application;
 import javafx.beans.binding.Bindings;
@@ -26,10 +38,12 @@ import javafx.beans.property.SimpleDoubleProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
+import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.scene.SnapshotParameters;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.chart.PieChart;
@@ -59,6 +73,7 @@ import javafx.scene.control.TreeTableRow;
 import javafx.scene.control.TreeTableView;
 import javafx.scene.control.cell.ProgressBarTreeTableCell;
 import javafx.scene.control.cell.TextFieldTreeTableCell;
+import javafx.scene.image.WritableImage;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
@@ -119,6 +134,8 @@ public class WbsProjectManager extends Application {
 	private static final double GANTT_TASK_NAME_WIDTH = 200;
 	private static final double GANTT_DAY_WIDTH = 25; // Width of one day column
 	private static final double GANTT_HEADER_HEIGHT = 40;
+
+	private TaskDbManager taskDbManager = new TaskDbManager();
 
 	@Override
 	public void start(Stage primaryStage) {
@@ -184,9 +201,14 @@ public class WbsProjectManager extends Application {
 		primaryStage.show();
 
 		updateMetadataInputFields();
-		loadSampleData();
+		boolean tablesIfNotExist = taskDbManager.createTablesIfNotExist();
+		if(tablesIfNotExist)
+			loadInitialDataFromDb();
+		else
+			loadSampleData();
 		updateDashboard();
 		drawGanttChart(); // Initial draw
+		
 	}
 
 	private void addListenersToTask(Task task) {
@@ -233,6 +255,15 @@ public class WbsProjectManager extends Application {
 		MenuBar menuBar = new MenuBar();
 		Menu fileMenu = new Menu("파일");
 
+		MenuItem dbSaveItem = new MenuItem("DB에 프로젝트 저장");
+        dbSaveItem.setOnAction(e -> saveAllProjectDataToDb());
+        
+        // MenuItem loadItem = new MenuItem("프로젝트 불러오기 (.wbs)..."); // Old file load
+        // loadItem.setOnAction(e -> loadProjectDataFromFile()); // Old file load
+        MenuItem dbLoadItem = new MenuItem("DB에서 프로젝트 불러오기");
+        dbLoadItem.setOnAction(e -> loadInitialDataFromDb()); // Re-load from DB
+        
+        
 		MenuItem saveItem = new MenuItem("프로젝트 저장 (.wbs)...");
 		saveItem.setOnAction(e -> saveProjectData());
 		MenuItem loadItem = new MenuItem("프로젝트 불러오기 (.wbs)...");
@@ -252,14 +283,54 @@ public class WbsProjectManager extends Application {
 		importJsonItem.setOnAction(e -> importFromJson());
 		importMenu.getItems().addAll(importCsvItem, importJsonItem);
 
+		
+		MenuItem exportDashboard = new MenuItem("Dashboard HTML로 내보내기...");
+		exportDashboard.setOnAction(e -> exportDashboardToHtmlReport());
+		
 		MenuItem exitItem = new MenuItem("종료");
 		exitItem.setOnAction(e -> primaryStage.close());
 
-		fileMenu.getItems().addAll(saveItem, loadItem, new SeparatorMenuItem(), exportMenu, importMenu,
-				new SeparatorMenuItem(), exitItem);
-		menuBar.getMenus().add(fileMenu);
+		fileMenu.getItems().addAll(dbSaveItem, dbLoadItem, new SeparatorMenuItem(), exportMenu, importMenu, new SeparatorMenuItem(), exportDashboard, new SeparatorMenuItem(), exitItem);
+
+	
+
+		menuBar.getMenus().addAll(fileMenu);
 		return menuBar;
 	}
+
+    // New method to save all current data to DB
+    private void saveAllProjectDataToDb() {
+        updateMetadataFromInputFields();
+        projectMetadata.setLastModifiedDate(LocalDate.now());
+        taskDbManager.saveProjectMetadata(projectMetadata);
+        updateMetadataInputFields(); // Refresh last modified display
+
+        // Clear existing tasks in DB first to avoid duplicates or orphaned data if structure changes significantly
+        // Or implement more sophisticated update logic in TaskDbManager.saveTask
+        taskDbManager.deleteAllTasks(); // Simpler for now: delete all then re-insert
+
+        for (Task task : rootTasks) {
+            taskDbManager.saveTask(task, null); // saveTask is recursive
+        }
+        showAlert("DB 저장 완료", "프로젝트 데이터가 데이터베이스에 성공적으로 저장되었습니다.");
+    }
+    
+
+    private void loadInitialDataFromDb() {
+        this.projectMetadata = taskDbManager.loadProjectMetadata();
+        updateMetadataInputFields();
+
+        List<Task> loadedTasks = taskDbManager.loadAllTasks();
+        if (loadedTasks.isEmpty()) {
+            // If DB is empty, load sample data and save it to DB for the first time
+            //loadSampleData(); // This populates rootTasks
+            saveAllProjectDataToDb(); // Save the sample data to DB
+        } else {
+            rootTasks.setAll(loadedTasks);
+        }
+        populateTreeTableViewFromRootTasks(); // This calls updateRowNumbers
+        rebuildFlatTaskList(); // This calls updateDashboard and gantt refresh via listeners
+    }
 
 	private void updateMetadataFromInputFields() {
 		projectMetadata.setProjectName(projectNameField.getText());
@@ -393,7 +464,7 @@ public class WbsProjectManager extends Application {
 		});
 
 		TreeTableColumn<Task, String> taskIdCol = new TreeTableColumn<>("작업 ID");
-		taskIdCol.setPrefWidth(180);
+		taskIdCol.setPrefWidth(50);
 		taskIdCol.setCellValueFactory(param -> {
 			if (param.getValue() != null && param.getValue().getValue() != null) {
 				return new ReadOnlyStringWrapper(param.getValue().getValue().getId());
@@ -1219,74 +1290,577 @@ public class WbsProjectManager extends Application {
 	}
 
 	private void exportToCsv() {
-		/* ... unchanged ... */ }
+        updateMetadataFromInputFields(); // Ensure current metadata is captured
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("CSV로 내보내기");
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV Files (*.csv)", "*.csv"));
+        File file = fileChooser.showSaveDialog(primaryStage);
+
+        if (file != null) {
+            try (PrintWriter writer = new PrintWriter(new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
+                // Write metadata headers and data
+                writer.println("Meta_ProjectName," + escapeCsv(projectMetadata.getProjectName()));
+                writer.println("Meta_StartDate," + (projectMetadata.getProjectStartDate() != null ? projectMetadata.getProjectStartDate().format(dateFormatter) : ""));
+                writer.println("Meta_EndDate," + (projectMetadata.getProjectEndDate() != null ? projectMetadata.getProjectEndDate().format(dateFormatter) : ""));
+                writer.println("Meta_Author," + escapeCsv(projectMetadata.getAuthor()));
+                writer.println("Meta_LastModified," + (projectMetadata.getLastModifiedDate() != null ? projectMetadata.getLastModifiedDate().format(dateFormatter) : ""));
+                writer.println(); // Blank line separator
+
+                // Write task headers
+                writer.println("ID,ParentID,Name,Assignee,StartDate,EndDate,Progress,IsCategory,IsLocked,PredecessorIDs");
+                List<Task> flatTasksForCsv = new ArrayList<>();
+                for (Task task : rootTasks) {
+                    collectTasksForCsv(task, "", flatTasksForCsv); // Use empty string for root's parent
+                }
+                for (Task task : flatTasksForCsv) {
+                    writer.println(String.join(",",
+                            escapeCsv(task.getId()),
+                            escapeCsv(task.getParentId()), 
+                            escapeCsv(task.getName()),
+                            escapeCsv(task.getAssignee()),
+                            task.getStartDate() != null ? task.getStartDate().format(dateFormatter) : "",
+                            task.getEndDate() != null ? task.getEndDate().format(dateFormatter) : "",
+                            String.valueOf(task.getProgress()),
+                            String.valueOf(task.isCategory()),
+                            String.valueOf(task.isLocked()),
+                            escapeCsv(String.join(";", task.getPredecessorIds())) // Join with semicolon for CSV
+                    ));
+                }
+                showAlert("CSV 내보내기 완료", "프로젝트가 CSV 파일로 성공적으로 내보내졌습니다.");
+            } catch (IOException e) {
+                e.printStackTrace();
+                showAlert("CSV 내보내기 오류", "CSV 파일 내보내기 중 오류 발생: " + e.getMessage());
+            }
+        }
+    }
 
 	private void collectTasksForCsv(Task task, String parentId, List<Task> flatList) {
-		/* ... unchanged ... */ }
+        task.setParentId(parentId); // Temporarily set parentId for CSV export logic
+        flatList.add(task);
+        if (task.getChildren() != null) {
+            for (Task child : task.getChildren()) {
+                collectTasksForCsv(child, task.getId(), flatList);
+            }
+        }
+    }
 
-	private String escapeCsv(String data) {
-		/* ... unchanged ... */ return "";
-	}
+	 private String escapeCsv(String data) {
+	        if (data == null) return "";
+	        String escapedData = data.replace("\"", "\"\""); // Escape double quotes
+	        if (data.contains(",") || data.contains("\"") || data.contains("\n") || data.contains("\r")) {
+	            escapedData = "\"" + escapedData + "\""; // Enclose in double quotes if it contains delimiter, quote, or newline
+	        }
+	        return escapedData;
+	    }
 
-	private void importFromCsv() {
-		/* ... unchanged ... */ }
+	 private void importFromCsv() {
+	        FileChooser fileChooser = new FileChooser();
+	        fileChooser.setTitle("CSV에서 가져오기");
+	        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV Files (*.csv)", "*.csv"));
+	        File file = fileChooser.showOpenDialog(primaryStage);
 
-	private String unescapeCsv(String data) {
-		/* ... unchanged ... */ return "";
-	}
+	        if (file != null) {
+	            try {
+	                List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+	                Map<String, Task> taskMap = new HashMap<>(); // To build hierarchy
+	                List<Task> importedRootTasks = new ArrayList<>();
+	                ProjectMetadata importedMetadata = new ProjectMetadata(); // Default
+	                
+	                boolean readingTasks = false;
+	                int taskHeaderIndex = -1;
 
-	private void exportToJson() {
-		/* ... unchanged ... */ }
+	                for (int i = 0; i < lines.size(); i++) {
+	                    String line = lines.get(i);
+	                    if (line.trim().isEmpty()) {
+	                        if (!readingTasks) readingTasks = true; 
+	                        continue;
+	                    }
+	                    // Basic CSV split, does not handle quotes within fields perfectly
+	                    String[] values = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
+
+
+	                    if (!readingTasks) { // Reading metadata
+	                        if (values.length >= 2) {
+	                            String key = values[0].trim();
+	                            String value = unescapeCsv(values[1].trim());
+	                            try {
+	                                if ("Meta_ProjectName".equals(key)) importedMetadata.setProjectName(value);
+	                                else if ("Meta_StartDate".equals(key) && !value.isEmpty()) importedMetadata.setProjectStartDate(LocalDate.parse(value, dateFormatter));
+	                                else if ("Meta_EndDate".equals(key) && !value.isEmpty()) importedMetadata.setProjectEndDate(LocalDate.parse(value, dateFormatter));
+	                                else if ("Meta_Author".equals(key)) importedMetadata.setAuthor(value);
+	                                else if ("Meta_LastModified".equals(key) && !value.isEmpty()) importedMetadata.setLastModifiedDate(LocalDate.parse(value, dateFormatter));
+	                            } catch (DateTimeParseException e) {
+	                                System.err.println("CSV 메타데이터 날짜 파싱 오류: " + value + " - " + e.getMessage());
+	                            }
+	                        }
+	                        continue;
+	                    }
+	                    
+	                    // Find task header row
+	                    if (taskHeaderIndex == -1 && values.length > 0 && "ID".equals(unescapeCsv(values[0].trim()))) {
+	                        taskHeaderIndex = i;
+	                        continue; // Skip header row
+	                    }
+	                    if (taskHeaderIndex == -1) continue; // Still searching for header or invalid format
+
+	                    if (values.length == 10) { // ID,ParentID,Name,Assignee,StartDate,EndDate,Progress,IsCategory,IsLocked,PredecessorIDs
+	                        try {
+	                            String id = unescapeCsv(values[0].trim());
+	                            String parentId = unescapeCsv(values[1].trim());
+	                            String name = unescapeCsv(values[2].trim());
+	                            String assignee = unescapeCsv(values[3].trim());
+	                            LocalDate startDate = values[4].trim().isEmpty() ? null : LocalDate.parse(values[4].trim(), dateFormatter);
+	                            LocalDate endDate = values[5].trim().isEmpty() ? null : LocalDate.parse(values[5].trim(), dateFormatter);
+	                            int progress = Integer.parseInt(values[6].trim());
+	                            boolean isCategory = Boolean.parseBoolean(values[7].trim());
+	                            boolean isLocked = Boolean.parseBoolean(values[8].trim());
+	                            List<String> predecessorIds = Arrays.stream(unescapeCsv(values[9].trim()).split(";"))
+	                                                              .map(String::trim)
+	                                                              .filter(s -> !s.isEmpty())
+	                                                              .collect(Collectors.toList());
+
+	                            Task task;
+	                            if (isCategory) {
+	                                task = new Task(name, true);
+	                            } else {
+	                                task = new Task(name, assignee, startDate, endDate, progress);
+	                            }
+	                            task.setIdDataForImport(id); 
+	                            task.setParentId(parentId); 
+	                            task.setLocked(isLocked);
+	                            task.setPredecessorIds(predecessorIds);
+	                            
+	                            taskMap.put(id, task);
+
+	                        } catch (Exception e) {
+	                            System.err.println("CSV 작업 데이터 파싱 오류: " + line + " - " + e.getMessage());
+	                        }
+	                    }
+	                }
+
+	                // Reconstruct hierarchy
+	                for (Task task : taskMap.values()) {
+	                    String parentId = task.getParentId();
+	                    if (parentId != null && !parentId.isEmpty() && taskMap.containsKey(parentId)) {
+	                        taskMap.get(parentId).addChild(task);
+	                    } else {
+	                        importedRootTasks.add(task);
+	                    }
+	                }
+	                
+	                projectMetadata = importedMetadata;
+	                rootTasks.setAll(importedRootTasks);
+
+	                updateMetadataInputFields();
+	                populateTreeTableViewFromRootTasks();
+	                rebuildFlatTaskList();
+	                showAlert("CSV 가져오기 완료", "CSV 파일에서 데이터를 가져왔습니다.");
+
+	            } catch (IOException e) {
+	                e.printStackTrace();
+	                showAlert("CSV 가져오기 오류", "CSV 파일 가져오기 중 오류 발생: " + e.getMessage());
+	            }
+	        }
+	    }
+
+	 private String unescapeCsv(String data) {
+	        if (data == null) return "";
+	        String d = data.trim();
+	        if (d.startsWith("\"") && d.endsWith("\"")) {
+	            d = d.substring(1, d.length() - 1);
+	        }
+	        return d.replace("\"\"", "\""); // Unescape double quotes
+	    }
+
+	  private void exportToJson() {
+	        updateMetadataFromInputFields(); // Ensure current metadata is captured
+	        FileChooser fileChooser = new FileChooser();
+	        fileChooser.setTitle("JSON으로 내보내기");
+	        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json"));
+	        File file = fileChooser.showSaveDialog(primaryStage);
+
+	        if (file != null) {
+	            try (PrintWriter writer = new PrintWriter(new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8))) {
+	                writer.println("{");
+	                // Metadata
+	                writer.println("  \"metadata\": {");
+	                writer.println("    \"projectName\": \"" + escapeJson(projectMetadata.getProjectName()) + "\",");
+	                writer.println("    \"projectStartDate\": \"" + (projectMetadata.getProjectStartDate() != null ? projectMetadata.getProjectStartDate().format(dateFormatter) : "") + "\",");
+	                writer.println("    \"projectEndDate\": \"" + (projectMetadata.getProjectEndDate() != null ? projectMetadata.getProjectEndDate().format(dateFormatter) : "") + "\",");
+	                writer.println("    \"author\": \"" + escapeJson(projectMetadata.getAuthor()) + "\",");
+	                writer.println("    \"lastModifiedDate\": \"" + (projectMetadata.getLastModifiedDate() != null ? projectMetadata.getLastModifiedDate().format(dateFormatter) : "") + "\"");
+	                writer.println("  },");
+	                // Tasks
+	                writer.println("  \"tasks\": [");
+	                for (int i = 0; i < rootTasks.size(); i++) {
+	                    writer.print(taskToJson(rootTasks.get(i), "    "));
+	                    if (i < rootTasks.size() - 1) {
+	                        writer.println(",");
+	                    } else {
+	                        writer.println();
+	                    }
+	                }
+	                writer.println("  ]");
+	                writer.println("}");
+	                showAlert("JSON 내보내기 완료", "프로젝트가 JSON 파일로 성공적으로 내보내졌습니다.");
+	            } catch (IOException e) {
+	                e.printStackTrace();
+	                showAlert("JSON 내보내기 오류", "JSON 파일 내보내기 중 오류 발생: " + e.getMessage());
+	            }
+	        }
+	    }
 
 	private String taskToJson(Task task, String indent) {
-		/* ... unchanged ... */ return "";
+		StringBuilder sb = new StringBuilder();
+		sb.append(indent).append("{\n");
+		sb.append(indent).append("  \"id\": \"").append(escapeJson(task.getId())).append("\",\n");
+		// parentId is implicit in JSON structure, but can be added for explicitness if
+		// needed for other systems
+		// sb.append(indent).append(" \"parentId\":
+		// \"").append(escapeJson(task.getParentId())).append("\",\n");
+		sb.append(indent).append("  \"name\": \"").append(escapeJson(task.getName())).append("\",\n");
+		sb.append(indent).append("  \"assignee\": \"").append(escapeJson(task.getAssignee())).append("\",\n");
+		sb.append(indent).append("  \"startDate\": \"")
+				.append(task.getStartDate() != null ? task.getStartDate().format(dateFormatter) : "").append("\",\n");
+		sb.append(indent).append("  \"endDate\": \"")
+				.append(task.getEndDate() != null ? task.getEndDate().format(dateFormatter) : "").append("\",\n");
+		sb.append(indent).append("  \"progress\": ").append(task.getProgress()).append(",\n");
+		sb.append(indent).append("  \"isCategory\": ").append(task.isCategory()).append(",\n");
+		sb.append(indent).append("  \"isLocked\": ").append(task.isLocked()).append(",\n");
+		sb.append(indent).append("  \"predecessorIds\": [").append(task.getPredecessorIds().stream()
+				.map(id -> "\"" + escapeJson(id) + "\"").collect(Collectors.joining(", "))).append("],\n");
+		sb.append(indent).append("  \"children\": [\n");
+		if (task.getChildren() != null) {
+			for (int i = 0; i < task.getChildren().size(); i++) {
+				sb.append(taskToJson(task.getChildren().get(i), indent + "    "));
+				if (i < task.getChildren().size() - 1) {
+					sb.append(",\n");
+				} else {
+					sb.append("\n");
+				}
+			}
+		}
+		sb.append(indent).append("  ]\n");
+		sb.append(indent).append("}");
+		return sb.toString();
 	}
 
 	private String escapeJson(String data) {
-		/* ... unchanged ... */ return "";
+		if (data == null)
+			return "";
+		return data.replace("\\", "\\\\").replace("\"", "\\\"").replace("\b", "\\b").replace("\f", "\\f")
+				.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
 	}
 
 	private void importFromJson() {
-		/* ... unchanged ... */ }
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("JSON에서 가져오기");
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json"));
+        File file = fileChooser.showOpenDialog(primaryStage);
+
+        if (file != null) {
+            try {
+                String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+                
+                ProjectMetadata newMetadata = parseProjectMetadataFromJson(content);
+                List<Task> newRootTasks = parseTasksFromJson(content);
+
+                if (newMetadata != null) {
+                    projectMetadata = newMetadata;
+                } else {
+                    projectMetadata = new ProjectMetadata(); // Reset if metadata parsing failed
+                    showAlert("경고", "JSON에서 메타데이터를 파싱하는 데 실패했습니다. 기본 메타데이터가 사용됩니다.");
+                }
+
+                rootTasks.setAll(newRootTasks != null ? newRootTasks : new ArrayList<>());
+
+                updateMetadataInputFields();
+                populateTreeTableViewFromRootTasks();
+                rebuildFlatTaskList(); // This is crucial
+                updateDashboard();
+                showAlert("JSON 가져오기 완료", "JSON 파일에서 데이터를 성공적으로 가져왔습니다.");
+
+            } catch (IOException e) {
+                e.printStackTrace();
+                showAlert("JSON 가져오기 오류", "JSON 파일 가져오기 중 오류 발생: " + e.getMessage());
+            } catch (Exception e) { // Catch broader parsing exceptions
+                e.printStackTrace();
+                showAlert("JSON 파싱 오류", "JSON 파일 파싱 중 오류 발생: " + e.getMessage());
+            }
+        }
+    }
 
 	private ProjectMetadata parseProjectMetadataFromJson(String jsonContent) {
-		/* ... unchanged ... */ return null;
-	}
+        try {
+            // Pattern to find the metadata object: "metadata"\s*:\s*\{ (captures content inside braces) \}
+            Pattern metaPattern = Pattern.compile("\"metadata\"\\s*:\\s*\\{([^}]*)\\}", Pattern.DOTALL);
+            Matcher metaMatcher = metaPattern.matcher(jsonContent);
+            if (metaMatcher.find()) {
+                String metaBlock = metaMatcher.group(1); // Content inside the metadata braces
+                ProjectMetadata meta = new ProjectMetadata();
+                meta.setProjectName(extractJsonStringValue(metaBlock, "projectName"));
+                String startDateStr = extractJsonStringValue(metaBlock, "projectStartDate");
+                if (startDateStr != null && !startDateStr.isEmpty()) meta.setProjectStartDate(LocalDate.parse(startDateStr, dateFormatter));
+                String endDateStr = extractJsonStringValue(metaBlock, "projectEndDate");
+                if (endDateStr != null && !endDateStr.isEmpty()) meta.setProjectEndDate(LocalDate.parse(endDateStr, dateFormatter));
+                meta.setAuthor(extractJsonStringValue(metaBlock, "author"));
+                String lastModDateStr = extractJsonStringValue(metaBlock, "lastModifiedDate");
+                 if (lastModDateStr != null && !lastModDateStr.isEmpty()) meta.setLastModifiedDate(LocalDate.parse(lastModDateStr, dateFormatter));
+                return meta;
+            }
+        } catch (Exception e) {
+            System.err.println("JSON 메타데이터 파싱 중 오류: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return null; // Return null or a default ProjectMetadata if parsing fails
+    }
 
 	private List<Task> parseTasksFromJson(String jsonContent) {
-		/* ... unchanged ... */ return new ArrayList<>();
-	}
+        try {
+            // Pattern to find the tasks array: "tasks"\s*:\s*\[ (captures content inside brackets) \]
+            Pattern tasksPattern = Pattern.compile("\"tasks\"\\s*:\\s*\\[(.*)\\]", Pattern.DOTALL);
+            Matcher tasksMatcher = tasksPattern.matcher(jsonContent);
+            if (tasksMatcher.find()) {
+                String tasksArrayContent = tasksMatcher.group(1).trim(); // Content inside the tasks array brackets
+                return parseTaskArrayString(tasksArrayContent);
+            }
+        } catch (Exception e) {
+            System.err.println("JSON 작업 목록 파싱 중 오류: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return new ArrayList<>(); // Return empty list if parsing fails or no tasks found
+    }
 
-	private List<Task> parseTaskArrayString(String tasksArrayContent) {
-		/* ... unchanged ... */ return new ArrayList<>();
-	}
+	// Parses a string representing an array of JSON task objects
+    private List<Task> parseTaskArrayString(String tasksArrayContent) {
+        List<Task> tasks = new ArrayList<>();
+        if (tasksArrayContent.isEmpty()) return tasks;
 
-	private Task parseTaskObject(String taskJson) {
-		/* ... unchanged ... */ return null;
-	}
+        // This regex tries to find top-level objects {...} within the array string.
+        // It's a simplified approach and might fail for very complex or malformed JSON.
+        Pattern taskObjectPattern = Pattern.compile("\\{([^\\{\\}]*+(?:\\{(?:[^\\{\\}]*+(?:\\{[^\\{\\}]*\\})*)*\\}[^\\{\\}]*)*)\\}");
+        Matcher taskObjectMatcher = taskObjectPattern.matcher(tasksArrayContent);
 
-	private String extractJsonStringValue(String json, String key) {
-		/* ... unchanged ... */ return "";
-	}
+        while (taskObjectMatcher.find()) {
+            String taskJson = taskObjectMatcher.group(0); // The full matched object string "{...}"
+            Task task = parseTaskObject(taskJson);
+            if (task != null) {
+                tasks.add(task);
+            }
+        }
+        return tasks;
+    }
 
-	private int extractJsonIntValue(String json, String key) {
-		/* ... unchanged ... */ return 0;
-	}
 
-	private boolean extractJsonBooleanValue(String json, String key) {
-		/* ... unchanged ... */ return false;
-	}
+    // Parses a single JSON task object string
+    private Task parseTaskObject(String taskJson) {
+        try {
+            String id = extractJsonStringValue(taskJson, "id");
+            String name = extractJsonStringValue(taskJson, "name");
+            boolean isCategory = extractJsonBooleanValue(taskJson, "isCategory");
 
-	private LocalDate extractJsonDateValue(String json, String key) {
-		/* ... unchanged ... */ return null;
-	}
+            Task task;
+            if (isCategory) {
+                task = new Task(name, true);
+            } else {
+                String assignee = extractJsonStringValue(taskJson, "assignee");
+                LocalDate startDate = extractJsonDateValue(taskJson, "startDate");
+                LocalDate endDate = extractJsonDateValue(taskJson, "endDate");
+                int progress = extractJsonIntValue(taskJson, "progress");
+                task = new Task(name, assignee, startDate, endDate, progress);
+            }
+            task.setIdDataForImport(id); // Set the original ID
+            task.setLocked(extractJsonBooleanValue(taskJson, "isLocked"));
+            task.setPredecessorIds(extractJsonStringListValue(taskJson, "predecessorIds"));
 
-	private List<String> extractJsonStringListValue(String json, String key) {
-		/* ... unchanged ... */ return new ArrayList<>();
-	}
+            // Recursively parse children
+            Pattern childrenPattern = Pattern.compile("\"children\"\\s*:\\s*\\[(.*)\\]", Pattern.DOTALL);
+            Matcher childrenMatcher = childrenPattern.matcher(taskJson);
+            if (childrenMatcher.find()) {
+                String childrenArrayContent = childrenMatcher.group(1).trim();
+                List<Task> children = parseTaskArrayString(childrenArrayContent); // Recursive call
+                for (Task child : children) {
+                    if (child != null) { // Ensure child parsed correctly
+                       task.addChild(child);
+                    }
+                }
+            }
+            return task;
+        } catch (Exception e) {
+            System.err.println("JSON 작업 객체 파싱 오류: " + taskJson.substring(0, Math.min(taskJson.length(), 100)) + "... - " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    // Helper methods for extracting JSON values (simplified, using regex)
+    private String extractJsonStringValue(String json, String key) {
+        // Pattern: "key"\s*:\s*" (captures value) "
+        // The value can contain escaped quotes. (?:[^"\\]|\\.)* matches any char except quote or backslash, or any escaped char.
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            return matcher.group(1).replace("\\\"", "\"").replace("\\\\", "\\"); // Unescape basic sequences
+        }
+        return ""; // Return empty for missing or non-string values for simplicity
+    }
+
+    private int extractJsonIntValue(String json, String key) {
+        // Pattern: "key"\s*:\s* (captures digits)
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(\\d+)");
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(1));
+            } catch (NumberFormatException e) { 
+                System.err.println("Error parsing int for key " + key + ": " + matcher.group(1));
+                return 0; 
+            }
+        }
+        return 0; // Default if not found or not a number
+    }
+
+    private boolean extractJsonBooleanValue(String json, String key) {
+        // Pattern: "key"\s*:\s* (true|false)
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(true|false)");
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            return Boolean.parseBoolean(matcher.group(1));
+        }
+        return false; // Default if not found or not a boolean
+    }
+    
+    private LocalDate extractJsonDateValue(String json, String key){
+        String dateStr = extractJsonStringValue(json, key); // Dates are stored as strings in our JSON
+        if(dateStr != null && !dateStr.isEmpty()){
+            try {
+                return LocalDate.parse(dateStr, dateFormatter);
+            } catch (DateTimeParseException e) {
+                System.err.println("Error parsing date for key " + key + ": " + dateStr + " - " + e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
+    
+    private List<String> extractJsonStringListValue(String json, String key) {
+        List<String> list = new ArrayList<>();
+        // Pattern: "key"\s*:\s*\[ (captures content inside brackets) \]
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\\[([^\\]]*)\\]");
+        Matcher matcher = pattern.matcher(json);
+        if (matcher.find()) {
+            String arrayContent = matcher.group(1).trim();
+            if (!arrayContent.isEmpty()) {
+                // Split by comma, then trim and remove quotes for each item
+                String[] items = arrayContent.split(",");
+                for (String item : items) {
+                    String trimmedItem = item.trim();
+                    if (trimmedItem.startsWith("\"") && trimmedItem.endsWith("\"")) {
+                        trimmedItem = trimmedItem.substring(1, trimmedItem.length() - 1);
+                    }
+                    list.add(trimmedItem.replace("\\\"", "\"").replace("\\\\", "\\")); // Unescape
+                }
+            }
+        }
+        return list;
+    }
 
 	public static void main(String[] args) {
 		launch(args);
 	}
 
+	// WbsProjectManager.java 내부에 추가될 메서드 (또는 기존 메서드 수정)
+
+	// ... javafx.scene.SnapshotParameters, javafx.scene.image.WritableImage, javafx.embed.swing.SwingFXUtils ...
+	// ... javax.imageio.ImageIO, java.awt.image.BufferedImage, java.io.ByteArrayOutputStream, java.util.Base64 ...
+	// 위 import 문들이 WbsProjectManager.java 상단에 필요합니다.
+
+	private String takeSnapshotAndEncode(Node node) {
+	    if (node == null || node.getScene() == null || node.getScene().getWindow() == null) {
+	        System.err.println("스냅샷을 생성할 노드가 준비되지 않았습니다 (Scene 또는 Window 없음).");
+	        return null;
+	    }
+	    // 스냅샷을 찍기 전에 노드가 실제로 렌더링될 기회를 주기 위해 Platform.runLater를 사용할 수 있으나,
+	    // 메뉴 액션 핸들러 내에서는 이미 UI 스레드이므로 직접 호출 가능할 수 있습니다.
+	    // 만약 문제가 발생하면 Platform.runLater로 감싸는 것을 고려하세요.
+	    
+	    WritableImage writableImage = new WritableImage((int) node.getBoundsInParent().getWidth(), (int) node.getBoundsInParent().getHeight());
+	    SnapshotParameters params = new SnapshotParameters();
+	    // params.setFill(Color.TRANSPARENT); // 배경을 투명하게 하려면
+	    node.snapshot(params, writableImage);
+
+	    ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+	    try {
+	        // SwingFXUtils를 사용하려면 java.desktop 모듈이 필요할 수 있습니다.
+	        // (module-info.java 파일에 requires java.desktop; 추가)
+	        BufferedImage bufferedImage = SwingFXUtils.fromFXImage(writableImage, null);
+	        ImageIO.write(bufferedImage, "png", outputStream);
+	        byte[] imageBytes = outputStream.toByteArray();
+	        return Base64.getEncoder().encodeToString(imageBytes);
+	    } catch (IOException e) {
+	        System.err.println("이미지 스냅샷 인코딩 오류: " + e.getMessage());
+	        e.printStackTrace();
+	        return null;
+	    }
+	}
+
+
+	private void exportDashboardToHtmlReport() {
+	    if (overallProgressBar == null || tasksPieChart == null || assigneeLoadSummaryArea == null) {
+	        showAlert("오류", "대시보드 데이터가 아직 준비되지 않았습니다.");
+	        return;
+	    }
+
+	    // 1. 현재 대시보드 데이터 수집
+	    double currentOverallProgress = overallProgressBar.getProgress();
+	    Map<String, Long> statusCounts = new HashMap<>();
+	    if (tasksPieChart.getData() != null) {
+	        for (PieChart.Data data : tasksPieChart.getData()) {
+	            String name = data.getName();
+	            long count = (long) data.getPieValue();
+	            String statusName = name.replaceAll("\\s*\\(.*\\)$", "").trim();
+	            statusCounts.put(statusName, count);
+	        }
+	    }
+	    // String assigneeSummaryText = assigneeLoadSummaryArea.getText(); // 텍스트 요약은 이미지로 대체
+
+	    // 2. 스냅샷 생성 및 인코딩
+	    String pieChartBase64 = takeSnapshotAndEncode(tasksPieChart);
+	    String assigneeLoadBase64 = takeSnapshotAndEncode(assigneeLoadSummaryArea);
+
+	    if (pieChartBase64 == null) {
+	        System.err.println("파이 차트 스냅샷 생성 실패. 보고서에 이미지가 포함되지 않을 수 있습니다.");
+	    }
+	    if (assigneeLoadBase64 == null) {
+	        System.err.println("담당자 요약 스냅샷 생성 실패. 보고서에 이미지가 포함되지 않을 수 있습니다.");
+	    }
+
+
+	    // 3. FileChooser로 저장 위치 선택
+	    FileChooser fileChooser = new FileChooser();
+	    fileChooser.setTitle("대시보드 HTML 보고서 저장");
+	    fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("HTML Files (*.html)", "*.html"));
+	    fileChooser.setInitialFileName("WBS_Dashboard_Report_" + LocalDate.now().format(dateFormatter) + ".html");
+	    File file = fileChooser.showSaveDialog(primaryStage);
+
+	    if (file != null) {
+	        // 4. DashboardHtmlExporter 호출
+	        DashboardHtmlExporter exporter = new DashboardHtmlExporter();
+	        exporter.exportDashboardToHtml(
+	            this.projectMetadata, 
+	            currentOverallProgress, 
+	            statusCounts, 
+	            pieChartBase64, 
+	            assigneeLoadBase64, 
+	            file
+	        );
+	        showAlert("내보내기 완료", "대시보드 보고서가 성공적으로 저장되었습니다:\n" + file.getAbsolutePath());
+	    }
+	}
+
+	// 이 exportDashboardToHtmlReport 메서드를 호출하는 메뉴 항목을 File 메뉴에 추가해야 합니다.
+	// 예시:
+	// MenuItem exportDashboardHtmlItem = new MenuItem("대시보드 HTML로 내보내기...");
+	// exportDashboardHtmlItem.setOnAction(e -> exportDashboardToHtmlReport());
+	// exportMenu.getItems().add(exportDashboardHtmlItem); // 기존 exportMenu에 추가
 }

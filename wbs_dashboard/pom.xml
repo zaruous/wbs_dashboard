@@ -58,6 +58,13 @@
 			<artifactId>javafx-base</artifactId>
 			<version>${javafx.version}</version>
 		</dependency>
+		
+		<!-- https://mvnrepository.com/artifact/org.mariadb.jdbc/mariadb-java-client -->
+		<dependency>
+		    <groupId>org.mariadb.jdbc</groupId>
+		    <artifactId>mariadb-java-client</artifactId>
+		    <version>3.5.2</version>
+		</dependency>
     </dependencies>
 
     <build>
