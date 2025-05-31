@@ -1,4 +1,4 @@
-module org.kyj.fx {
+module org.kyj.fx.wsb.dashboard {
     requires javafx.controls;
     requires javafx.fxml;
     requires javafx.media;
