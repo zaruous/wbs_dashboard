@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.ComboBox?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.PasswordField?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.ColumnConstraints?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.RowConstraints?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox prefHeight="500" prefWidth="600" spacing="10" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1" fx:controller="org.kyj.fx.wbs.dashboard.DatabaseSettingsController">
+    <padding>
+        <Insets bottom="10" left="10" right="10" top="10" />
+    </padding>
+
+    <GridPane hgap="10" vgap="5">
+        <Label text="데이터베이스 타입:" GridPane.columnIndex="0" GridPane.rowIndex="0" />
+        <ComboBox fx:id="dbTypeComboBox" promptText="선택" GridPane.columnIndex="1" GridPane.rowIndex="0" />
+
+        <Label text="호스트:" GridPane.columnIndex="0" GridPane.rowIndex="1" />
+        <TextField fx:id="hostField" GridPane.columnIndex="1" GridPane.rowIndex="1" />
+
+        <Label text="포트:" GridPane.columnIndex="0" GridPane.rowIndex="2" />
+        <TextField fx:id="portField" GridPane.columnIndex="1" GridPane.rowIndex="2" />
+
+        <Label text="데이터베이스명:" GridPane.columnIndex="0" GridPane.rowIndex="3" />
+        <TextField fx:id="dbNameField" GridPane.columnIndex="1" GridPane.rowIndex="3" />
+
+        <Label text="사용자명:" GridPane.columnIndex="0" GridPane.rowIndex="4" />
+        <TextField fx:id="usernameField" GridPane.columnIndex="1" GridPane.rowIndex="4" />
+
+        <Label text="비밀번호:" GridPane.columnIndex="0" GridPane.rowIndex="5" />
+        <PasswordField fx:id="passwordField" GridPane.columnIndex="1" GridPane.rowIndex="5" />
+        <columnConstraints>
+            <ColumnConstraints percentWidth="30.0" />
+            <ColumnConstraints percentWidth="70.0" />
+        </columnConstraints>
+      <rowConstraints>
+         <RowConstraints />
+         <RowConstraints />
+         <RowConstraints />
+         <RowConstraints />
+         <RowConstraints />
+         <RowConstraints />
+      </rowConstraints>
+    </GridPane>
+
+    <HBox alignment="CENTER_LEFT" spacing="10">
+        <padding>
+            <Insets bottom="10" top="10" />
+        </padding>
+        <Button fx:id="clearButton" onAction="#handleClearForm" prefWidth="80.0" text="새 항목" />
+        <Button fx:id="addButton" onAction="#handleAddOrUpdateConfig" prefWidth="80.0" text="추가 / 수정" />
+        <Button fx:id="deleteButton" onAction="#handleDeleteConfig" prefWidth="80.0" text="삭제" />
+        <Region HBox.hgrow="ALWAYS" />
+        <Button fx:id="saveAllButton" onAction="#handleSaveAllConfigs" text="모든 설정 파일로 저장" />
+    </HBox>
+
+    <TableView fx:id="configsTableView" VBox.vgrow="ALWAYS">
+        <columns>
+            <TableColumn fx:id="idColumn" prefWidth="50" text="ID" />
+            <TableColumn fx:id="dbTypeColumn" prefWidth="100" text="타입" />
+            <TableColumn fx:id="hostColumn" prefWidth="150" text="호스트" />
+            <TableColumn fx:id="dbNameColumn" prefWidth="150" text="DB명" />
+            <TableColumn fx:id="usernameColumn" prefWidth="100" text="사용자명" />
+        </columns>
+    </TableView>
+</VBox>

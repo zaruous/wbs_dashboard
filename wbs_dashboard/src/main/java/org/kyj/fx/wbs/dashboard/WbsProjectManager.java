@@ -39,9 +39,11 @@ import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.embed.swing.SwingFXUtils;
+import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.SnapshotParameters;
 import javafx.scene.canvas.Canvas;
@@ -74,6 +76,7 @@ import javafx.scene.control.TreeTableView;
 import javafx.scene.control.cell.ProgressBarTreeTableCell;
 import javafx.scene.control.cell.TextFieldTreeTableCell;
 import javafx.scene.image.WritableImage;
+import javafx.scene.input.KeyCombination;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
@@ -215,26 +218,32 @@ public class WbsProjectManager extends Application {
 		task.nameProperty().addListener((obs, ov, nv) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.assigneeProperty().addListener((obs, ov, nv) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.progressProperty().addListener((obs, oldVal, newVal) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.startDateProperty().addListener((obs, oldVal, newVal) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.endDateProperty().addListener((obs, oldVal, newVal) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.categoryProperty().addListener((obs, ov, nv) -> {
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.lockedProperty().addListener((obs, ov, nv) -> {
 			TreeItem<Task> selectedTreeItem = treeTableView.getSelectionModel().getSelectedItem();
@@ -244,11 +253,19 @@ public class WbsProjectManager extends Application {
 			treeTableView.refresh();
 			updateDashboard();
 			drawGanttChart();
+			updateTime();
 		});
 		task.predecessorIdsProperty().addListener((obs, ov, nv) -> {
 			treeTableView.refresh();
 			drawGanttChart();
+			updateTime();
 		});
+	}
+
+	private void updateTime() {
+		TreeItem<Task> selectedTreeItem = treeTableView.getSelectionModel().getSelectedItem();
+		if(selectedTreeItem ==null) return;
+		selectedTreeItem.getValue().updateUpdateDate();
 	}
 
 	private MenuBar createMenuBar() {
@@ -257,12 +274,12 @@ public class WbsProjectManager extends Application {
 
 		MenuItem dbSaveItem = new MenuItem("DB에 프로젝트 저장");
         dbSaveItem.setOnAction(e -> saveAllProjectDataToDb());
+        dbSaveItem.setAccelerator(KeyCombination.keyCombination("Ctrl+S")); // Ctrl+S for saving to DB);
         
         // MenuItem loadItem = new MenuItem("프로젝트 불러오기 (.wbs)..."); // Old file load
         // loadItem.setOnAction(e -> loadProjectDataFromFile()); // Old file load
         MenuItem dbLoadItem = new MenuItem("DB에서 프로젝트 불러오기");
         dbLoadItem.setOnAction(e -> loadInitialDataFromDb()); // Re-load from DB
-        
         
 		MenuItem saveItem = new MenuItem("프로젝트 저장 (.wbs)...");
 		saveItem.setOnAction(e -> saveProjectData());
@@ -290,11 +307,35 @@ public class WbsProjectManager extends Application {
 		MenuItem exitItem = new MenuItem("종료");
 		exitItem.setOnAction(e -> primaryStage.close());
 
-		fileMenu.getItems().addAll(dbSaveItem, dbLoadItem, new SeparatorMenuItem(), exportMenu, importMenu, new SeparatorMenuItem(), exportDashboard, new SeparatorMenuItem(), exitItem);
+		fileMenu.getItems().addAll(dbSaveItem, dbLoadItem, 
+				new SeparatorMenuItem(),
+				saveItem, loadItem ,
+				new SeparatorMenuItem(),
+				exportMenu, importMenu, 
+				new SeparatorMenuItem(), exportDashboard, 
+				new SeparatorMenuItem(), exitItem);
 
 	
-
-		menuBar.getMenus().addAll(fileMenu);
+		Menu configMenu = new Menu("설정");
+		MenuItem dbConfigMenuItem = new MenuItem("DB 설정");
+		dbConfigMenuItem.setOnAction(e -> {
+			try {
+				FXMLLoader loader = new FXMLLoader();
+				loader.setLocation(WbsProjectManager.class.getResource("DatabaseSettingsView.fxml"));
+				Parent root = loader.load();
+				Stage stage = new Stage();
+				stage.setTitle("DatabaseSettings");
+				Scene value = new Scene(root, 800, 600);
+				stage.setScene(value);
+				stage.initOwner(primaryStage);
+				stage.show();
+			} catch (IOException e1) {
+				e1.printStackTrace();
+			}
+		});
+		configMenu.getItems().add(dbConfigMenuItem);
+		
+		menuBar.getMenus().addAll(fileMenu, configMenu);
 		return menuBar;
 	}
 
@@ -310,7 +351,8 @@ public class WbsProjectManager extends Application {
         taskDbManager.deleteAllTasks(); // Simpler for now: delete all then re-insert
 
         for (Task task : rootTasks) {
-            taskDbManager.saveTask(task, null); // saveTask is recursive
+        	//if(task.isUpdate())
+        		taskDbManager.saveTask(task, null); // saveTask is recursive
         }
         showAlert("DB 저장 완료", "프로젝트 데이터가 데이터베이스에 성공적으로 저장되었습니다.");
     }
@@ -324,7 +366,7 @@ public class WbsProjectManager extends Application {
         if (loadedTasks.isEmpty()) {
             // If DB is empty, load sample data and save it to DB for the first time
             //loadSampleData(); // This populates rootTasks
-            saveAllProjectDataToDb(); // Save the sample data to DB
+            //saveAllProjectDataToDb(); // Save the sample data to DB
         } else {
             rootTasks.setAll(loadedTasks);
         }
@@ -975,8 +1017,8 @@ public class WbsProjectManager extends Application {
 		BorderPane ganttPane = new BorderPane();
 		ganttPane.setPadding(new Insets(10));
 
-		ganttDisplayStartDatePicker = new DatePicker(LocalDate.now().withDayOfMonth(1));
-		ganttDisplayEndDatePicker = new DatePicker(LocalDate.now().withDayOfMonth(1).plusMonths(2).minusDays(1));
+		ganttDisplayStartDatePicker = new DatePicker(LocalDate.now().withDayOfMonth(1).plusMonths(-2));
+		ganttDisplayEndDatePicker = new DatePicker(LocalDate.now().withDayOfMonth(3).plusMonths(1).minusDays(1));
 		Button drawGanttButton = new Button("간트 차트 그리기");
 		drawGanttButton.setOnAction(e -> drawGanttChart());
 
@@ -1204,6 +1246,7 @@ public class WbsProjectManager extends Application {
 			pieChartData.add(
 					new PieChart.Data(numTasksForProgress == 0 && !allTasksFlat.isEmpty() ? "카테고리만 존재" : "업무 없음", 1));
 		}
+		
 		tasksPieChart.setData(pieChartData);
 		applyPieChartColors();
 
@@ -1231,7 +1274,7 @@ public class WbsProjectManager extends Application {
 				if (data.getName().startsWith("진행 예정"))
 					specificStyle = "-fx-pie-color: #ffc107;";
 				else if (data.getName().startsWith("진행 중"))
-					specificStyle = "-fx-pie-color: #007bff;";
+					specificStyle = "-fx-pie-color: #007bff;"; 
 				else if (data.getName().startsWith("완료"))
 					specificStyle = "-fx-pie-color: #28a745;";
 				else if (data.getName().startsWith("업무 없음") || data.getName().startsWith("카테고리만 존재"))

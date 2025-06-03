@@ -45,6 +45,8 @@ public class Task implements java.io.Serializable {
 	private transient BooleanProperty locked;
 	private transient ListProperty<String> predecessorIds;
 	private transient ObservableList<Task> children;
+	
+	private ObjectProperty<LocalDate> updateDate;
 
 	public Task(String name, String assignee, LocalDate startDate, LocalDate endDate, int progress) {
 		this.idData = "task_" + System.nanoTime() + "_" + (long) (Math.random() * 1000000);
@@ -56,6 +58,7 @@ public class Task implements java.io.Serializable {
 		this.categoryData = false;
 		this.lockedData = false;
 		this.predecessorIdsData = new ArrayList<>();
+		this.updateDate = new SimpleObjectProperty<>(null);
 	}
 
 	public Task(String name, boolean isCategory) {
@@ -68,6 +71,7 @@ public class Task implements java.io.Serializable {
 		this.categoryData = isCategory;
 		this.lockedData = false;
 		this.predecessorIdsData = new ArrayList<>();
+		this.updateDate = new SimpleObjectProperty<>(null);
 	}
 
 	private Task() {
@@ -344,8 +348,22 @@ public class Task implements java.io.Serializable {
 		return Objects.equals(idData, task.idData);
 	}
 
+	/**
+	 * 
+	 */
+	void updateUpdateDate() {
+		this.updateDate.set(LocalDate.now());
+	}
+	
 	@Override
 	public int hashCode() {
 		return Objects.hash(idData);
+	}
+
+	/**
+	 * @return
+	 */
+	public boolean isUpdate() {
+		return this.updateDate.get() != null;
 	}
 }
